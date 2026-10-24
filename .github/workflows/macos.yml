@@ -1,4 +1,4 @@
-name: Secure macOS VDS
+name: Cloudflare macOS VDS
 
 on:
   workflow_dispatch:
@@ -10,21 +10,51 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup tmate session
-        id: tmate
-        uses: mxschmitt/action-tmate@v3
-        with:
-          detached: true
-
-      - name: Send Private Notification
+      - name: Install Web Terminal & Cloudflare Tunnel
         env:
           TOPIC: ${{ secrets.NTFY_TOPIC }}
-          WEB_URL: ${{ steps.tmate.outputs.web-url }}
-          SSH_CMD: ${{ steps.tmate.outputs.ssh-command }}
         run: |
-          curl -s \
-            -H "Title: macOS VDS Hazir" \
-            -H "Priority: urgent" \
-            -H "Tags: desktop_computer,key" \
-            -d "WEB: $WEB_URL | SSH: $SSH_CMD" \
-            "https://ntfy.sh/${TOPIC}"
+          echo "[*] Gerekli bilesenler indiriliyor..."
+          # Web terminal motoru (ttyd)
+          brew install ttyd > /dev/null 2>&1
+          
+          # Cloudflared (M1/M2 Apple Silicon binary)
+          curl -sL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-arm64.tgz | tar -xz
+          chmod +x cloudflared
+
+          # Terminal oturumunu yerel 7681 portunda baslat
+          ttyd -p 7681 -W bash &
+          sleep 2
+
+          # Cloudflare uzerinden dis dunyaya sifreli tunelle
+          ./cloudflared tunnel --url http://localhost:7681 > cf.log 2>&1 &
+          
+          echo "[*] Cloudflare tuneli kuruluyor..."
+          # Linkin olusmasi icin 8 saniye bekle
+          sleep 8
+          
+          # URL'yi log dosyasindan cek
+          CF_URL=$(grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' cf.log | head -n 1)
+
+          echo "=========================================="
+          echo ">>> MACOS WEB TERMINAL LINKIN <<<"
+          echo "$CF_URL"
+          echo "=========================================="
+
+          # ntfy bildirimine gonder
+          if [ -n "$TOPIC" ]; then
+            curl -s \
+              -H "Title: macOS VDS Hazir" \
+              -H "Priority: urgent" \
+              -H "Tags: apple,desktop_computer" \
+              -d "Terminal Linkin: $CF_URL" \
+              "https://ntfy.sh/${TOPIC}" > /dev/null
+          fi
+
+      - name: Keep Alive Loop
+        run: |
+          echo "[*] macOS oturumu canli tutuluyor..."
+          while true; do
+            sleep 60
+            echo "[$(date '+%H:%M:%S')] macOS aktif..."
+          done
