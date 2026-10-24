@@ -6,39 +6,60 @@ on:
 jobs:
   launch-mac:
     runs-on: macos-latest
+    timeout-minutes: 360 # 6 saat ust limit
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Web Terminal & Cloudflare Tunnel
+      - name: Start macOS Web Terminal
         env:
           TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: |
-          echo "[*] Gerekli bilesenler indiriliyor..."
-          # Web terminal motoru (ttyd)
-          brew install ttyd > /dev/null 2>&1
-          
-          # Cloudflared (M1/M2 Apple Silicon binary)
-          curl -sL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-arm64.tgz | tar -xz
-          chmod +x cloudflared
-
-          # Terminal oturumunu yerel 7681 portunda baslat
-          ttyd -p 7681 -W bash &
-          sleep 2
-
-          # Cloudflare uzerinden dis dunyaya sifreli tunelle
-          ./cloudflared tunnel --url http://localhost:7681 > cf.log 2>&1 &
-          
-          echo "[*] Cloudflare tuneli kuruluyor..."
-          # Linkin olusmasi icin 8 saniye bekle
-          sleep 8
-          
-          # URL'yi log dosyasindan cek
-          CF_URL=$(grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' cf.log | head -n 1)
+          set -e
+          echo "=========================================="
+          echo "[1/4] Web Terminal motoru (ttyd) kuruluyor..."
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          export HOMEBREW_NO_INSTALL_CLEANUP=1
+          brew install ttyd
 
           echo "=========================================="
-          echo ">>> MACOS WEB TERMINAL LINKIN <<<"
-          echo "$CF_URL"
+          echo "[2/4] Cloudflare Tunnel indiriliyor..."
+          curl -sL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-arm64.tgz | tar -xz
+          chmod +x cloudflared
+          xattr -d com.apple.quarantine cloudflared 2>/dev/null || true
+
+          echo "=========================================="
+          echo "[3/4] Servisler baslatiliyor..."
+          # Web terminalini yerel porta bagla
+          ttyd -p 7681 -W bash &
+          TTYD_PID=$!
+
+          # Cloudflare uzerinden dis dunyaya sifreli tunelle
+          ./cloudflared tunnel --url http://127.0.0.1:7681 > cf.log 2>&1 &
+          CF_PID=$!
+
+          echo "[*] Cloudflare baglantisi bekleniyor..."
+          CF_URL=""
+          for i in {1..35}; do
+            if [ -f cf.log ]; then
+              CF_URL=$(grep -o 'https://[^ ]*trycloudflare\.com' cf.log | head -n 1)
+              if [ -n "$CF_URL" ]; then
+                break
+              fi
+            fi
+            sleep 1
+          done
+
+          if [ -z "$CF_URL" ]; then
+            echo "[!] Tunel linki alinamadi. cf.log ciktisi:"
+            cat cf.log
+            exit 1
+          fi
+
+          echo "=========================================="
+          echo ">>> MACOS WEB TERMINAL LINKIN HAZIR <<<"
+          echo "LINK: $CF_URL"
           echo "=========================================="
 
           # ntfy bildirimine gonder
@@ -46,15 +67,16 @@ jobs:
             curl -s \
               -H "Title: macOS VDS Hazir" \
               -H "Priority: urgent" \
-              -H "Tags: apple,desktop_computer" \
+              -H "Tags: apple,desktop_computer,rocket" \
               -d "Terminal Linkin: $CF_URL" \
               "https://ntfy.sh/${TOPIC}" > /dev/null
+            echo "[+] Link ntfy kanalina firlatildi."
           fi
 
-      - name: Keep Alive Loop
-        run: |
-          echo "[*] macOS oturumu canli tutuluyor..."
-          while true; do
+          echo "=========================================="
+          echo "[4/4] Oturum aktif tutuluyor..."
+          set +e
+          while kill -0 $TTYD_PID 2>/dev/null && kill -0 $CF_PID 2>/dev/null; do
             sleep 60
-            echo "[$(date '+%H:%M:%S')] macOS aktif..."
+            echo "[$(date '+%H:%M:%S')] macOS canli..."
           done
