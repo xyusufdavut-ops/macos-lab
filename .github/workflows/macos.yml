@@ -10,35 +10,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install and Setup tmate
+      - name: Setup tmate session
+        id: tmate
+        uses: mxschmitt/action-tmate@v3
+        with:
+          detached: true
+
+      - name: Send Private Notification
         env:
           TOPIC: ${{ secrets.NTFY_TOPIC }}
+          WEB_URL: ${{ steps.tmate.outputs.web-url }}
+          SSH_CMD: ${{ steps.tmate.outputs.ssh-command }}
         run: |
-          echo "[*] tmate yukleniyor..."
-          brew install tmate > /dev/null 2>&1
-          
-          # Yeni oturum baslat
-          tmate -S /tmp/tmate.sock new-session -d
-          tmate -S /tmp/tmate.sock wait tmate-ready
-          
-          # Linkleri cek
-          SSH_CMD=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
-          WEB_URL=$(tmate -S /tmp/tmate.sock display -p '#{tmate_web}')
-          
-          # ntfy uzerinden bildirimi gonder
           curl -s \
-            -H "Title: macOS VDS Baglanti Linki" \
+            -H "Title: macOS VDS Hazir" \
             -H "Priority: urgent" \
             -H "Tags: desktop_computer,key" \
-            -d "SSH: $SSH_CMD | WEB: $WEB_URL" \
-            "https://ntfy.sh/${TOPIC}" > /dev/null
-            
-          echo "[+] Baglanti bilgileri iletildi."
-
-      - name: Keep Alive Loop
-        run: |
-          echo "[*] Oturum aktif tutuluyor..."
-          while true; do
-            sleep 60
-            echo "[$(date '+%H:%M:%S')] macOS canli..."
-          done
+            -d "WEB: $WEB_URL | SSH: $SSH_CMD" \
+            "https://ntfy.sh/${TOPIC}"
